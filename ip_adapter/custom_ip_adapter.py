@@ -65,36 +65,34 @@ class MLPProjModel(torch.nn.Module):
         return clip_extra_context_tokens
 
 
-class IPAdapter:
-    def __init__(self, sd_pipe, image_encoder_path, ip_ckpt, device, num_tokens=4):
-        self.device = device
+class CustomIPAdapter(torch.nn.Module):
+    def __init__(self, image_encoder_path, ip_ckpt):
+        super().__init__()
         self.image_encoder_path = image_encoder_path
         self.ip_ckpt = ip_ckpt
-        self.num_tokens = num_tokens
+        # self.num_tokens = num_tokens
 
-        self.pipe = sd_pipe.to(self.device)
-        self.set_ip_adapter()
+        # self.pipe = sd_pipe.to(self.device)
+        # self.set_ip_adapter(unet)
 
         # load image encoder
-        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(self.image_encoder_path).to(
-            self.device, dtype=torch.float16
-        )
+        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(self.image_encoder_path)
         self.clip_image_processor = CLIPImageProcessor()
         # image proj model
         self.image_proj_model = self.init_proj()
 
         self.load_ip_adapter()
 
+        self.image_encoder.requires_grad_(False)
+
     def init_proj(self):
-        image_proj_model = ImageProjModel(
+        image_proj_model = MLPProjModel(
             cross_attention_dim=self.pipe.unet.config.cross_attention_dim,
-            clip_embeddings_dim=self.image_encoder.config.projection_dim,
-            clip_extra_context_tokens=self.num_tokens,
-        ).to(self.device, dtype=torch.float16)
+            clip_embeddings_dim=self.image_encoder.config.hidden_size,
+        )
         return image_proj_model
 
-    def set_ip_adapter(self):
-        unet = self.pipe.unet
+    def set_ip_adapter(self, unet):
         attn_procs = {}
         for name in unet.attn_processors.keys():
             cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
@@ -114,7 +112,7 @@ class IPAdapter:
                     cross_attention_dim=cross_attention_dim,
                     scale=1.0,
                     num_tokens=self.num_tokens,
-                ).to(self.device, dtype=torch.float16)
+                )
         unet.set_attn_processor(attn_procs)
         if hasattr(self.pipe, "controlnet"):
             if isinstance(self.pipe.controlnet, MultiControlNetModel):
@@ -138,19 +136,10 @@ class IPAdapter:
         ip_layers = torch.nn.ModuleList(self.pipe.unet.attn_processors.values())
         ip_layers.load_state_dict(state_dict["ip_adapter"])
 
-    @torch.inference_mode()
-    def get_image_embeds(self, pil_image=None, clip_image_embeds=None):
-        if pil_image is not None:
-            if isinstance(pil_image, Image.Image):
-                pil_image = [pil_image]
-            clip_image = self.clip_image_processor(images=pil_image, return_tensors="pt").pixel_values
-            clip_image_embeds = self.image_encoder(clip_image.to(self.device, dtype=torch.float16)).image_embeds
-            breakpoint()
-        else:
-            clip_image_embeds = clip_image_embeds.to(self.device, dtype=torch.float16)
-        image_prompt_embeds = self.image_proj_model(clip_image_embeds)
-        uncond_image_prompt_embeds = self.image_proj_model(torch.zeros_like(clip_image_embeds))
-        return image_prompt_embeds, uncond_image_prompt_embeds
+    def get_image_embeds(self, image):
+        image_embeds = self.image_encoder(image).image_embeds
+        image_embeds = self.image_proj_model(image_embeds)
+        return image_embeds
 
     def set_scale(self, scale):
         for attn_processor in self.pipe.unet.attn_processors.values():

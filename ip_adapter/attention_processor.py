@@ -347,7 +347,8 @@ class IPAttnProcessor2_0(torch.nn.Module):
             encoder_hidden_states = hidden_states
         else:
             # get encoder_hidden_states, ip_hidden_states
-            end_pos = encoder_hidden_states.shape[1] - self.num_tokens
+            end_pos = 77
+            # end_pos = encoder_hidden_states.shape[1] - self.num_tokens
             encoder_hidden_states, ip_hidden_states = (
                 encoder_hidden_states[:, :end_pos, :],
                 encoder_hidden_states[:, end_pos:, :],
