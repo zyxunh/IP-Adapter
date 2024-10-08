@@ -66,10 +66,11 @@ class MLPProjModel(torch.nn.Module):
 
 
 class CustomIPAdapter(torch.nn.Module):
-    def __init__(self, image_encoder_path, ip_ckpt):
+    def __init__(self, unet_config, image_encoder_path, ip_ckpt):
         super().__init__()
         self.image_encoder_path = image_encoder_path
         self.ip_ckpt = ip_ckpt
+        self.unet_config = unet_config
         # self.num_tokens = num_tokens
 
         # self.pipe = sd_pipe.to(self.device)
@@ -81,13 +82,13 @@ class CustomIPAdapter(torch.nn.Module):
         # image proj model
         self.image_proj_model = self.init_proj()
 
-        self.load_ip_adapter()
+        # self.load_ip_adapter()
 
         self.image_encoder.requires_grad_(False)
 
     def init_proj(self):
         image_proj_model = MLPProjModel(
-            cross_attention_dim=self.pipe.unet.config.cross_attention_dim,
+            cross_attention_dim=self.unet_config.cross_attention_dim,
             clip_embeddings_dim=self.image_encoder.config.hidden_size,
         )
         return image_proj_model
@@ -137,7 +138,8 @@ class CustomIPAdapter(torch.nn.Module):
         ip_layers.load_state_dict(state_dict["ip_adapter"])
 
     def get_image_embeds(self, image):
-        image_embeds = self.image_encoder(image).image_embeds
+        image_embeds = self.image_encoder(image, output_hidden_states=True).hidden_states[-2]
+        image_embeds = image_embeds[:, 1:]
         image_embeds = self.image_proj_model(image_embeds)
         return image_embeds
 
@@ -210,7 +212,7 @@ class CustomIPAdapter(torch.nn.Module):
         return images
 
 
-class IPAdapterXL(IPAdapter):
+class IPAdapterXL(CustomIPAdapter):
     """SDXL"""
 
     def generate(
@@ -275,7 +277,7 @@ class IPAdapterXL(IPAdapter):
         return images
 
 
-class IPAdapterPlus(IPAdapter):
+class IPAdapterPlus(CustomIPAdapter):
     """IP-Adapter with fine-grained features"""
 
     def init_proj(self):
@@ -305,7 +307,6 @@ class IPAdapterPlus(IPAdapter):
         uncond_image_prompt_embeds = self.image_proj_model(uncond_clip_image_embeds)
         image_prompt_embeds = self.process_pick_mask(image_prompt_embeds)
         uncond_image_prompt_embeds = self.process_pick_mask(uncond_image_prompt_embeds)
-        breakpoint()
         return image_prompt_embeds, uncond_image_prompt_embeds
 
     def process_pick_mask(self, embeds):
@@ -329,7 +330,7 @@ class IPAdapterFull(IPAdapterPlus):
         return image_proj_model
 
 
-class IPAdapterPlusXL(IPAdapter):
+class IPAdapterPlusXL(CustomIPAdapter):
     """SDXL"""
 
     def init_proj(self):
